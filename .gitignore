@@ -2,3 +2,5 @@
 .env
 .env.local
 composer.lock
+.*
+!.gitignore
