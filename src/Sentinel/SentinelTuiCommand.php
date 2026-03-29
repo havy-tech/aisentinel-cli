@@ -222,16 +222,15 @@ final class SentinelTuiCommand implements Executable
             ),
         ];
 
-        // Daemon bridge polling (same pattern as SentinelCommand)
+        // Daemon bridge: display external messages as info, don't re-process.
+        // Re-routing external messages through humanMessage() creates an echo
+        // chamber when both sentinel and sentinel-tui watch the same project —
+        // each instance's agent responses broadcast back, causing infinite loops.
         if ($bridge !== null) {
             $tasks['daemon'] = Task::of(
-                static function (ExecutionScope $s) use ($bridge, $coordinator, $tuiRenderer): void {
+                static function (ExecutionScope $s) use ($bridge, $tuiRenderer): void {
                     while (!$s->isCancelled) {
                         $s->delay(3.0);
-
-                        if ($coordinator->isBusy()) {
-                            continue;
-                        }
 
                         try {
                             $external = $bridge->readExternal();
@@ -242,8 +241,7 @@ final class SentinelTuiCommand implements Executable
                                     continue;
                                 }
 
-                                $tuiRenderer->info("Incoming from {$from}: " . substr($text, 0, 80));
-                                $coordinator->externalMessage($from, $text, $s);
+                                $tuiRenderer->info("[{$from}]: " . substr($text, 0, 120));
                             }
                         } catch (\Throwable $e) {
                             $tuiRenderer->error('Daemon poll: ' . $e->getMessage());
@@ -277,19 +275,22 @@ final class SentinelTuiCommand implements Executable
         $w = $termConfig->width;
         $h = $termConfig->height;
 
-        // Vertical: status(1) | agents(fill) | input(1)
+        // Vertical: status(1) | pad(1) | agents(fill) | pad(1) | input(1)
         $vRects = Layout::vertical(
             Rect::sized($w, $h),
             Constraint::length(1),
+            Constraint::length(1),
             Constraint::fill(),
+            Constraint::length(1),
             Constraint::length(1),
         );
 
         $surface->region('status', $vRects[0], new RegionConfig(tickRate: 10.0));
-        $surface->region('input', $vRects[2]);
+        // $vRects[1] and $vRects[3] are padding rows (no region, just empty space)
+        $surface->region('input', $vRects[4]);
 
-        // Agent grid within the middle rect
-        self::createAgentGrid($surface, $agents, $vRects[1]);
+        // Agent grid within the middle rect (index 2 after padding)
+        self::createAgentGrid($surface, $agents, $vRects[2]);
     }
 
     private static function recreateLayout(Surface $surface, array $agents, TerminalConfig $termConfig): void
@@ -300,14 +301,16 @@ final class SentinelTuiCommand implements Executable
         $vRects = Layout::vertical(
             Rect::sized($w, $h),
             Constraint::length(1),
+            Constraint::length(1),
             Constraint::fill(),
+            Constraint::length(1),
             Constraint::length(1),
         );
 
         $surface->getRegion('status')?->resize($vRects[0]);
-        $surface->getRegion('input')?->resize($vRects[2]);
+        $surface->getRegion('input')?->resize($vRects[4]);
 
-        self::resizeAgentGrid($surface, $agents, $vRects[1]);
+        self::resizeAgentGrid($surface, $agents, $vRects[2]);
     }
 
     private static function createAgentGrid(Surface $surface, array $agents, Rect $area): void
