@@ -13,7 +13,7 @@ use Phalanx\Ai\Message\Message;
 use Phalanx\Ai\Turn;
 use Phalanx\ExecutionScope;
 use Phalanx\Sentinel\Agent\ReviewAgent;
-use Phalanx\Sentinel\Render\ConsoleRenderer;
+use Phalanx\Sentinel\Render\ReviewRenderer;
 use Phalanx\Sentinel\Watcher\FileChange;
 use Phalanx\Task\Task;
 
@@ -34,7 +34,7 @@ final class Coordinator
      */
     public function __construct(
         private readonly array $agents,
-        private readonly ConsoleRenderer $renderer,
+        private readonly ReviewRenderer $renderer,
         private readonly string $projectRoot,
         private readonly ?DaemonAiBridge $bridge = null,
     ) {}
@@ -77,7 +77,7 @@ final class Coordinator
 
             $this->renderer->agentFeedback($run->glyph, $run->color, $text);
             $this->lastRoundFeedback[$agentName] = $text;
-            $this->appendToConversation($agentName, $changeSummary, $text);
+            $this->saveConversation($agentName, $run);
             $this->bridge?->broadcast($agentName, $text, $triggerSummary);
         }
 
@@ -106,7 +106,7 @@ final class Coordinator
                 }
 
                 $this->renderer->agentFeedback($run->glyph, $run->color, $text);
-                $this->appendToConversation($agentName, $prompt, $text);
+                $this->saveConversation($agentName, $run);
                 $this->bridge?->broadcast($agentName, $text, 'human: ' . $message);
             }
         } finally {
@@ -190,18 +190,23 @@ final class Coordinator
     ): AgentRunResult {
         $events = AgentLoop::run($turn, $scope);
         $tokenBuffer = '';
+        $conversation = null;
 
         foreach ($events($scope) as $event) {
             if (!$event instanceof AgentEvent) {
                 continue;
             }
 
-            if ($event->kind === AgentEventKind::TokenDelta) {
-                $tokenBuffer .= $event->data->text;
-            }
+            match ($event->kind) {
+                AgentEventKind::TokenDelta => $tokenBuffer .= $event->data->text,
+                AgentEventKind::AgentComplete => $conversation = $event->data instanceof AgentResult
+                    ? $event->data->conversation
+                    : null,
+                default => null,
+            };
         }
 
-        return new AgentRunResult($agentName, $agentGlyph, $agentColor, $tokenBuffer);
+        return new AgentRunResult($agentName, $agentGlyph, $agentColor, $tokenBuffer, $conversation);
     }
 
     private function conversationFor(ReviewAgent $agent): Conversation
@@ -210,14 +215,11 @@ final class Coordinator
             ?? Conversation::create()->system($agent->instructions);
     }
 
-    private function appendToConversation(string $agentName, string $userMessage, string $assistantMessage): void
+    private function saveConversation(string $agentName, AgentRunResult $run): void
     {
-        $agent = $this->findAgent($agentName);
-        $existing = $this->conversationFor($agent);
-
-        $this->conversations[$agentName] = $existing
-            ->user($userMessage)
-            ->assistant($assistantMessage);
+        if ($run->conversation !== null) {
+            $this->conversations[$agentName] = $run->conversation;
+        }
     }
 
     /**
@@ -272,14 +274,4 @@ final class Coordinator
         return implode("\n\n", $parts);
     }
 
-    private function findAgent(string $name): ReviewAgent
-    {
-        foreach ($this->agents as $agent) {
-            if ($agent->name() === $name) {
-                return $agent;
-            }
-        }
-
-        return $this->agents[0];
-    }
 }

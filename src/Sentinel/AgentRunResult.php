@@ -11,5 +11,6 @@ final readonly class AgentRunResult
         public string $glyph,
         public string $color,
         public string $text,
+        public ?\Phalanx\Ai\Message\Conversation $conversation = null,
     ) {}
 }

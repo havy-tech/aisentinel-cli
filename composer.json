@@ -13,6 +13,7 @@
         "phalanx/ai": "@dev",
         "phalanx/console": "@dev",
         "phalanx/stream": "@dev",
+        "phalanx/terminal": "@dev",
         "daemonai/sdk": "@dev",
         "react/child-process": "^0.6",
         "symfony/runtime": "^7.2",

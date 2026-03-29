@@ -9,7 +9,7 @@ use Phalanx\Sentinel\Watcher\FileChange;
 use React\EventLoop\Loop;
 use React\Stream\WritableResourceStream;
 
-final class ConsoleRenderer
+final class ConsoleRenderer implements ReviewRenderer
 {
     private const RESET = "\033[0m";
     private const BOLD = "\033[1m";
