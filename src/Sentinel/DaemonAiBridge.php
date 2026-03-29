@@ -16,7 +16,7 @@ final class DaemonAiBridge
         private readonly string $projectPath,
     ) {
         $this->sessionId = substr(bin2hex(random_bytes(4)), 0, 8);
-        $this->checkpoint = Daemon::observe(limit: 1)['checkpoint'];
+        $this->checkpoint = Daemon::observe(limit: 0)['checkpoint'];
     }
 
     public function broadcast(string $agentName, string $feedback, string $trigger): void

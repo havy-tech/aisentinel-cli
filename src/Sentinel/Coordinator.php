@@ -60,6 +60,7 @@ final class Coordinator
                 continue;
             }
 
+            $this->renderer->agentFeedback($agentName, $run->color, $text);
             $this->lastRoundFeedback[$agentName] = $text;
             $this->appendToConversation($agentName, $changeSummary, $text);
             $this->bridge?->broadcast($agentName, $text, $triggerSummary);
@@ -84,6 +85,7 @@ final class Coordinator
                 continue;
             }
 
+            $this->renderer->agentFeedback($agentName, $run->color, $text);
             $this->appendToConversation($agentName, $prompt, $text);
             $this->bridge?->broadcast($agentName, $text, 'human: ' . $message);
         }
@@ -111,13 +113,12 @@ final class Coordinator
                 ->message(Message::user($prompt))
                 ->maxSteps(3);
 
-            $renderer = $this->renderer;
             $projectRoot = $this->projectRoot;
 
             $tasks[$agentName] = Task::of(
-                static function (ExecutionScope $child) use ($turn, $agentName, $agentColor, $renderer, $projectRoot): AgentRunResult {
+                static function (ExecutionScope $child) use ($turn, $agentName, $agentColor, $projectRoot): AgentRunResult {
                     $child = $child->withAttribute('sentinel.project_root', $projectRoot);
-                    return self::executeAndStream($turn, $child, $agentName, $agentColor, $renderer);
+                    return self::executeAndCollect($turn, $child, $agentName, $agentColor);
                 }
             );
         }
@@ -142,13 +143,12 @@ final class Coordinator
                 ->message(Message::user($prompt))
                 ->maxSteps($maxSteps);
 
-            $renderer = $this->renderer;
             $projectRoot = $this->projectRoot;
 
             $tasks[$agentName] = Task::of(
-                static function (ExecutionScope $child) use ($turn, $agentName, $agentColor, $renderer, $projectRoot): AgentRunResult {
+                static function (ExecutionScope $child) use ($turn, $agentName, $agentColor, $projectRoot): AgentRunResult {
                     $child = $child->withAttribute('sentinel.project_root', $projectRoot);
-                    return self::executeAndStream($turn, $child, $agentName, $agentColor, $renderer);
+                    return self::executeAndCollect($turn, $child, $agentName, $agentColor);
                 }
             );
         }
@@ -156,17 +156,13 @@ final class Coordinator
         return $tasks;
     }
 
-    private static function executeAndStream(
+    private static function executeAndCollect(
         Turn $turn,
         ExecutionScope $scope,
         string $agentName,
         string $agentColor,
-        ConsoleRenderer $renderer,
     ): AgentRunResult {
         $events = AgentLoop::run($turn, $scope);
-
-        $renderer->agentStreamStart($agentName, $agentColor);
-
         $tokenBuffer = '';
 
         foreach ($events($scope) as $event) {
@@ -174,33 +170,10 @@ final class Coordinator
                 continue;
             }
 
-            match ($event->kind) {
-                AgentEventKind::TokenDelta => (static function () use ($event, &$tokenBuffer, $renderer, $agentColor, $agentName): void {
-                    $text = $event->data->text;
-                    $tokenBuffer .= $text;
-                    $renderer->agentToken($agentName, $agentColor, $text);
-                })(),
-
-                AgentEventKind::ToolCallStart => $renderer->toolActivity(
-                    $agentName,
-                    $agentColor,
-                    $event->data->toolName,
-                    'running',
-                ),
-
-                AgentEventKind::ToolCallComplete => $renderer->toolActivity(
-                    $agentName,
-                    $agentColor,
-                    $event->data->toolName,
-                    'done',
-                    $event->elapsed,
-                ),
-
-                default => null,
-            };
+            if ($event->kind === AgentEventKind::TokenDelta) {
+                $tokenBuffer .= $event->data->text;
+            }
         }
-
-        $renderer->agentStreamEnd();
 
         return new AgentRunResult($agentName, $agentColor, $tokenBuffer);
     }
