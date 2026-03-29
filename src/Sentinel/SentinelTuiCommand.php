@@ -181,6 +181,8 @@ final class SentinelTuiCommand implements Executable
                 return;
             }
 
+            $tuiRenderer->humanMessage($submitted);
+
             // ANTI-DEADLOCK: humanMessage() calls scope->concurrent() which suspends
             // the fiber. But this callback runs on the event loop, not in a fiber.
             // async() creates a new fiber for the concurrent operation.
@@ -188,7 +190,8 @@ final class SentinelTuiCommand implements Executable
                 try {
                     $coordinator->humanMessage($submitted, $scope);
                 } catch (\Throwable $e) {
-                    $tuiRenderer->error($e->getMessage());
+                    $tuiRenderer->error('Agent error: ' . $e->getMessage());
+                    @file_put_contents('/tmp/sentinel-tui-error.log', $e . "\n\n", FILE_APPEND);
                 }
             })();
         });
