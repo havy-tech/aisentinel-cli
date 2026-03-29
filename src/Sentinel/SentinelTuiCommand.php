@@ -144,7 +144,8 @@ final class SentinelTuiCommand implements Executable
 
             $inputRegion = $s->getRegion('input');
             if ($inputRegion !== null && $inputRegion->isDirty) {
-                $inputRegion->draw($inputLine);
+                $inputBox = new Box($inputLine, BoxStyle::Single, null, Palette::muted());
+                $inputRegion->draw($inputBox);
             }
         });
 
@@ -181,7 +182,8 @@ final class SentinelTuiCommand implements Executable
                 return;
             }
 
-            $tuiRenderer->humanMessage($submitted);
+            // Don't call tuiRenderer->humanMessage() here — Coordinator.humanMessage()
+            // calls renderer->humanMessage() internally. Calling both causes duplicates.
 
             // ANTI-DEADLOCK: humanMessage() calls scope->concurrent() which suspends
             // the fiber. But this callback runs on the event loop, not in a fiber.
@@ -278,19 +280,18 @@ final class SentinelTuiCommand implements Executable
         $w = $termConfig->width;
         $h = $termConfig->height;
 
-        // Vertical: status(1) | pad(1) | agents(fill) | pad(1) | input(1)
+        // Vertical: status(1) | pad(1) | agents(fill) | input(3)
         $vRects = Layout::vertical(
             Rect::sized($w, $h),
             Constraint::length(1),
             Constraint::length(1),
             Constraint::fill(),
-            Constraint::length(1),
-            Constraint::length(1),
+            Constraint::length(3),
         );
 
         $surface->region('status', $vRects[0], new RegionConfig(tickRate: 10.0));
-        // $vRects[1] and $vRects[3] are padding rows (no region, just empty space)
-        $surface->region('input', $vRects[4]);
+        // $vRects[1] is a padding row (no region, just empty space)
+        $surface->region('input', $vRects[3]);
 
         // Agent grid within the middle rect (index 2 after padding)
         self::createAgentGrid($surface, $agents, $vRects[2]);
@@ -306,12 +307,11 @@ final class SentinelTuiCommand implements Executable
             Constraint::length(1),
             Constraint::length(1),
             Constraint::fill(),
-            Constraint::length(1),
-            Constraint::length(1),
+            Constraint::length(3),
         );
 
         $surface->getRegion('status')?->resize($vRects[0]);
-        $surface->getRegion('input')?->resize($vRects[4]);
+        $surface->getRegion('input')?->resize($vRects[3]);
 
         self::resizeAgentGrid($surface, $agents, $vRects[2]);
     }
