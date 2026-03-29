@@ -17,13 +17,13 @@ final class SentinelServiceBundle implements ServiceBundle
             ->factory(static function () use ($context): ProviderConfig {
                 $config = ProviderConfig::create();
 
-                $anthropicKey = $context['ANTHROPIC_API_KEY'] ?? getenv('ANTHROPIC_API_KEY') ?: null;
+                $anthropicKey = $context['ANTHROPIC_API_KEY'] ?? $_ENV['ANTHROPIC_API_KEY'] ?? getenv('ANTHROPIC_API_KEY') ?: null;
                 if ($anthropicKey !== null) {
-                    $model = $context['ANTHROPIC_MODEL'] ?? getenv('ANTHROPIC_MODEL') ?: 'claude-sonnet-4-20250514';
+                    $model = $context['ANTHROPIC_MODEL'] ?? $_ENV['ANTHROPIC_MODEL'] ?? getenv('ANTHROPIC_MODEL') ?: 'claude-sonnet-4-20250514';
                     $config->anthropic(apiKey: $anthropicKey, model: $model);
                 }
 
-                $openaiKey = $context['OPENAI_API_KEY'] ?? getenv('OPENAI_API_KEY') ?: null;
+                $openaiKey = $context['OPENAI_API_KEY'] ?? $_ENV['OPENAI_API_KEY'] ?? getenv('OPENAI_API_KEY') ?: null;
                 if ($openaiKey !== null) {
                     $config->openai(apiKey: $openaiKey);
                 }
@@ -33,14 +33,17 @@ final class SentinelServiceBundle implements ServiceBundle
 
         $services->config(SentinelConfig::class, static function (array $ctx): SentinelConfig {
             $projectRoot = $ctx['SENTINEL_PROJECT_ROOT']
+                ?? $_ENV['SENTINEL_PROJECT_ROOT']
                 ?? getenv('SENTINEL_PROJECT_ROOT')
                 ?: getcwd();
 
             $dossierDir = $ctx['SENTINEL_DOSSIER_DIR']
+                ?? $_ENV['SENTINEL_DOSSIER_DIR']
                 ?? getenv('SENTINEL_DOSSIER_DIR')
                 ?: dirname(__DIR__, 2) . '/personas';
 
             $debounce = (float) ($ctx['SENTINEL_DEBOUNCE']
+                ?? $_ENV['SENTINEL_DEBOUNCE']
                 ?? getenv('SENTINEL_DEBOUNCE')
                 ?: 0.5);
 

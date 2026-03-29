@@ -73,6 +73,7 @@ final readonly class SentinelCommand implements Executable
                             $coordinator->reviewChanges($batch, $s);
                         } catch (\Throwable $e) {
                             $renderer->error($e->getMessage());
+                            @file_put_contents('/tmp/sentinel-trace.log', $e . "\n\n", FILE_APPEND);
                         }
                     }
                 }
