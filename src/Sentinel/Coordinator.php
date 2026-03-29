@@ -19,9 +19,6 @@ use Phalanx\Task\Task;
 
 final class Coordinator
 {
-    /** @var array<string, Conversation> */
-    private array $conversations = [];
-
     /** @var array<string, string> */
     private array $lastRoundFeedback = [];
 
@@ -106,7 +103,6 @@ final class Coordinator
                 }
 
                 $this->renderer->agentFeedback($run->glyph, $run->color, $text);
-                $this->saveConversation($agentName, $run);
                 $this->bridge?->broadcast($agentName, $text, 'human: ' . $message);
             }
         } finally {
@@ -211,15 +207,7 @@ final class Coordinator
 
     private function conversationFor(ReviewAgent $agent): Conversation
     {
-        return $this->conversations[$agent->name()]
-            ?? Conversation::create()->system($agent->instructions);
-    }
-
-    private function saveConversation(string $agentName, AgentRunResult $run): void
-    {
-        if ($run->conversation !== null) {
-            $this->conversations[$agentName] = $run->conversation;
-        }
+        return Conversation::create()->system($agent->instructions);
     }
 
     /**
