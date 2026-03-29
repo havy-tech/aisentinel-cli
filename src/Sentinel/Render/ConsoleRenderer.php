@@ -6,6 +6,8 @@ namespace Phalanx\Sentinel\Render;
 
 use Phalanx\Sentinel\Watcher\ChangeKind;
 use Phalanx\Sentinel\Watcher\FileChange;
+use React\EventLoop\Loop;
+use React\Stream\WritableResourceStream;
 
 final class ConsoleRenderer
 {
@@ -43,9 +45,17 @@ final class ConsoleRenderer
 
     private float $startTime;
 
+    private ?WritableResourceStream $logStream = null;
+
     public function __construct()
     {
         $this->startTime = microtime(true);
+
+        $logPath = getcwd() . '/sentinel-error.log';
+        $h = @fopen($logPath, 'a');
+        if ($h !== false) {
+            $this->logStream = new WritableResourceStream($h, Loop::get());
+        }
     }
 
     public function banner(): void
@@ -182,11 +192,7 @@ final class ConsoleRenderer
     public function error(string $message): void
     {
         $this->writeLine(self::FG_RED . "  [error] " . self::RESET . $message);
-        @file_put_contents(
-            getcwd() . '/sentinel-error.log',
-            '[' . date('Y-m-d H:i:s') . '] ' . $message . "\n",
-            FILE_APPEND | LOCK_EX,
-        );
+        $this->logStream?->write('[' . date('Y-m-d H:i:s') . '] ' . $message . "\n");
     }
 
     public function shutdown(): void
