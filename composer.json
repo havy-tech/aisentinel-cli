@@ -4,20 +4,19 @@
     "type": "project",
     "license": "MIT",
     "repositories": [
-        { "type": "path", "url": "../phalanx/packages/*" },
-        { "type": "path", "url": "/Users/jhavens/Code/Me/Rust/daemonai/sdks/php" }
+        { "type": "vcs", "url": "https://github.com/havy-tech/daemonai-php-sdk" }
     ],
     "require": {
         "php": "^8.4",
-        "phalanx/core": "@dev",
-        "phalanx/ai": "@dev",
-        "phalanx/console": "@dev",
-        "phalanx/stream": "@dev",
-        "phalanx/terminal": "@dev",
-        "daemonai/sdk": "@dev",
+        "phalanx/core": "dev-main",
+        "phalanx/ai": "dev-main",
+        "phalanx/console": "dev-main",
+        "phalanx/stream": "dev-main",
+        "daemonai/sdk": "dev-main",
         "react/child-process": "^0.6",
         "symfony/runtime": "^7.2",
-        "symfony/dotenv": "^7.2"
+        "symfony/dotenv": "^7.2",
+        "tempest/highlight": "^2.17"
     },
     "bin": ["bin/sentinel.php"],
     "autoload": {

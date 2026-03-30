@@ -23,7 +23,11 @@ interface ReviewRenderer
 
     public function humanMessage(string $message): void;
 
-    public function reviewComplete(int $reviewNumber): void;
+    public function externalMessage(string $from, string $message): void;
+
+    public function reviewComplete(int $reviewNumber, ?float $elapsedSeconds = null, ?int $totalTokens = null): void;
+
+    public function prompt(): void;
 
     public function info(string $message): void;
 

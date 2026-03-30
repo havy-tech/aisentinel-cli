@@ -24,6 +24,7 @@ final class ConsoleRenderer implements ReviewRenderer
     private const FG_CYAN = "\033[36m";
 
     private const BG_NONE = '';
+    private const INDENT = '    ';
 
     private const COLORS = [
         'blue' => "\033[34m",
@@ -47,8 +48,11 @@ final class ConsoleRenderer implements ReviewRenderer
 
     private ?WritableResourceStream $logStream = null;
 
+    private readonly CodeBlockFormatter $codeFormatter;
+
     public function __construct()
     {
+        $this->codeFormatter = new CodeBlockFormatter();
         $this->startTime = microtime(true);
 
         $logPath = getcwd() . '/sentinel-error.log';
@@ -61,7 +65,7 @@ final class ConsoleRenderer implements ReviewRenderer
     public function banner(): void
     {
         $this->writeLine('');
-        $this->writeLine(self::BOLD . self::FG_CYAN . '  SENTINEL' . self::RESET . self::DIM . ' -- Phalanx Agent Watcher' . self::RESET);
+        $this->writeLine(self::BOLD . self::FG_CYAN . '  SENTINEL' . self::RESET . self::DIM . ' -- Multi-Agent Code Review' . self::RESET);
         $this->writeLine(self::DIM . '  ' . str_repeat('-', 50) . self::RESET);
         $this->writeLine('');
     }
@@ -122,10 +126,13 @@ final class ConsoleRenderer implements ReviewRenderer
 
         $this->writeLine(self::DIM . "  [{$elapsed}] " . self::RESET . $c . self::BOLD . $agentName . self::RESET);
 
+        $text = $this->codeFormatter->format($text);
         $lines = explode("\n", $text);
         foreach ($lines as $line) {
             $formatted = $this->highlightSeverity($line);
-            $this->writeLine("    " . $formatted);
+            foreach (self::wordWrap($formatted, self::INDENT, $this->terminalWidth()) as $wrapped) {
+                $this->writeLine($wrapped);
+            }
         }
 
         $this->writeLine('');
@@ -152,17 +159,44 @@ final class ConsoleRenderer implements ReviewRenderer
 
     public function humanMessage(string $message): void
     {
-        $elapsed = $this->elapsed();
-        $this->writeLine('');
-        $this->writeLine(self::DIM . "  [{$elapsed}]" . self::RESET . self::BOLD . self::FG_WHITE . " YOU" . self::RESET);
-        $this->writeLine("    " . $message);
         $this->writeLine('');
     }
 
-    public function reviewComplete(int $reviewNumber): void
+    public function externalMessage(string $from, string $message): void
     {
-        $this->writeLine(self::DIM . "  --- review #{$reviewNumber} complete ---" . self::RESET);
+        $elapsed = $this->elapsed();
         $this->writeLine('');
+        $this->writeLine(self::DIM . "  [{$elapsed}] " . self::RESET . self::FG_CYAN . $from . self::RESET);
+
+        foreach (self::wordWrap($message, self::INDENT, $this->terminalWidth()) as $line) {
+            $this->writeLine($line);
+        }
+
+        $this->writeLine('');
+    }
+
+    public function reviewComplete(int $reviewNumber, ?float $elapsedSeconds = null, ?int $totalTokens = null): void
+    {
+        $parts = ["review #{$reviewNumber}"];
+
+        if ($elapsedSeconds !== null) {
+            $parts[] = sprintf('%.1fs', $elapsedSeconds);
+        }
+
+        if ($totalTokens !== null) {
+            $parts[] = number_format($totalTokens) . ' tok';
+        }
+
+        $mem = memory_get_usage(true);
+        $parts[] = $this->formatBytes($mem);
+
+        $this->writeLine(self::DIM . '  --- ' . implode(' | ', $parts) . ' ---' . self::RESET);
+        $this->writeLine('');
+    }
+
+    public function prompt(): void
+    {
+        $this->write(self::FG_CYAN . '  +> ' . self::RESET);
     }
 
     public function toolActivity(string $agentName, string $color, string $toolName, string $status, ?float $elapsedMs = null): void
@@ -227,9 +261,69 @@ final class ConsoleRenderer implements ReviewRenderer
         return sprintf('%dm%02ds', $minutes, $remaining);
     }
 
+    private function terminalWidth(): int
+    {
+        static $width = null;
+
+        return $width ??= (int) (getenv('COLUMNS') ?: exec('tput cols 2>/dev/null') ?: 120);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private static function wordWrap(string $text, string $indent, int $terminalWidth): array
+    {
+        if ($text === '') {
+            return [$indent];
+        }
+
+        $maxWidth = $terminalWidth - mb_strlen($indent);
+        if ($maxWidth < 20) {
+            return [$indent . $text];
+        }
+
+        $plainLength = mb_strlen(preg_replace('/\033\[[0-9;]*m/', '', $text));
+        if ($plainLength <= $maxWidth) {
+            return [$indent . $text];
+        }
+
+        $words = explode(' ', $text);
+        $lines = [];
+        $current = '';
+        $currentPlain = 0;
+
+        foreach ($words as $word) {
+            $wordPlain = mb_strlen(preg_replace('/\033\[[0-9;]*m/', '', $word));
+
+            if ($currentPlain > 0 && ($currentPlain + 1 + $wordPlain) > $maxWidth) {
+                $lines[] = $indent . $current;
+                $current = $word;
+                $currentPlain = $wordPlain;
+            } else {
+                $current = $currentPlain > 0 ? $current . ' ' . $word : $word;
+                $currentPlain += ($currentPlain > 0 ? 1 : 0) + $wordPlain;
+            }
+        }
+
+        if ($current !== '') {
+            $lines[] = $indent . $current;
+        }
+
+        return $lines;
+    }
+
+    private function formatBytes(int $bytes): string
+    {
+        if ($bytes < 1024 * 1024) {
+            return sprintf('%.0f KB', $bytes / 1024);
+        }
+
+        return sprintf('%.1f MB', $bytes / (1024 * 1024));
+    }
+
     private function writeLine(string $text): void
     {
-        fwrite(STDOUT, $text . "\n");
+        fwrite(STDOUT, $text . "\r\n");
     }
 
     private function write(string $text): void

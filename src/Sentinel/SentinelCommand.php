@@ -39,7 +39,7 @@ final readonly class SentinelCommand implements Executable
 
         $renderer->banner();
 
-        $projectRoot = $args->get('project') ?? $config->projectRoot;
+        $projectRoot = realpath($args->get('project') ?? $config->projectRoot) ?: ($args->get('project') ?? $config->projectRoot);
         $personaNames = $this->resolvePersonas($options->get('preset'), $options->get('persona'), $config->dossierDir, $renderer);
 
         $agents = self::loadAgents($config->dossierDir, $renderer, $personaNames);
@@ -62,7 +62,7 @@ final readonly class SentinelCommand implements Executable
         $renderer->ready();
 
         $fileChanges = ProjectWatcher::watch($projectRoot, $config->debounce);
-        $humanInput = StdinReader::lines();
+        $humanInput = RawInputReader::lines();
 
         $tasks = [
             'watcher' => Task::of(
@@ -121,8 +121,7 @@ final readonly class SentinelCommand implements Executable
                                     continue;
                                 }
 
-                                $renderer->info("Incoming from {$from}: " . substr($text, 0, 80) . (strlen($text) > 80 ? '...' : ''));
-                                $coordinator->externalMessage($from, $text, $s);
+                                $renderer->info("External ({$from}): " . substr($text, 0, 80) . (strlen($text) > 80 ? '...' : ''));
                             }
                         } catch (\Throwable $e) {
                             $renderer->error('Daemon poll: ' . $e->getMessage());

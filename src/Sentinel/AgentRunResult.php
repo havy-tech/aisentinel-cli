@@ -12,5 +12,6 @@ final readonly class AgentRunResult
         public string $color,
         public string $text,
         public ?\Phalanx\Ai\Message\Conversation $conversation = null,
+        public \Phalanx\Ai\Event\TokenUsage $usage = new \Phalanx\Ai\Event\TokenUsage(),
     ) {}
 }

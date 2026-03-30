@@ -5,6 +5,10 @@ declare(strict_types=1);
 namespace Phalanx\Sentinel;
 
 use DaemonAI\Daemon;
+use Psr\Http\Message\ResponseInterface;
+use React\Http\Browser;
+
+use function React\Async\await;
 
 final class DaemonAiBridge
 {
@@ -12,11 +16,27 @@ final class DaemonAiBridge
 
     public readonly string $sessionId;
 
+    private readonly Browser $browser;
+
+    private readonly string $baseUrl;
+
     public function __construct(
         private readonly string $projectPath,
+        string $baseUrl = 'http://127.0.0.1:9077',
     ) {
         $this->sessionId = substr(bin2hex(random_bytes(4)), 0, 8);
-        $this->checkpoint = Daemon::observe(limit: 0)['checkpoint'];
+        $this->baseUrl = rtrim($baseUrl, '/');
+        $this->browser = (new Browser())
+            ->withTimeout(3.0)
+            ->withRejectErrorResponse(false);
+
+        /** @var ResponseInterface $response */
+        $response = await($this->browser->get($this->baseUrl . '/api/observe?limit=0'));
+
+        if ($response->getStatusCode() < 400) {
+            $data = json_decode((string) $response->getBody(), true);
+            $this->checkpoint = $data['checkpoint'] ?? 0;
+        }
     }
 
     public function broadcast(string $agentName, string $feedback, string $trigger): void
@@ -39,12 +59,21 @@ final class DaemonAiBridge
     /** @return list<array{agent: string, message: string, session: string, project: string}> */
     public function readExternal(): array
     {
-        $result = Daemon::observe(
-            kinds: ['custom'],
-            since: $this->checkpoint,
-        );
+        $url = $this->baseUrl . '/api/observe?' . http_build_query([
+            'kinds' => 'custom',
+            'since' => $this->checkpoint,
+        ]);
 
-        $this->checkpoint = $result['checkpoint'];
+        /** @var ResponseInterface $response */
+        $response = await($this->browser->get($url));
+
+        if ($response->getStatusCode() >= 400) {
+            return [];
+        }
+
+        $result = json_decode((string) $response->getBody(), true);
+
+        $this->checkpoint = $result['checkpoint'] ?? $this->checkpoint;
 
         $ownApp = 'sentinel-' . $this->sessionId;
         $external = [];
@@ -66,13 +95,21 @@ final class DaemonAiBridge
         return $external;
     }
 
-    public static function tryConnect(string $projectPath): ?self
-    {
-        $health = @file_get_contents('http://127.0.0.1:9077/health');
-        if ($health !== 'ok') {
+    public static function tryConnect(
+        string $projectPath,
+        string $baseUrl = 'http://127.0.0.1:9077',
+    ): ?self {
+        try {
+            $browser = (new Browser())->withTimeout(2.0);
+            $response = await($browser->get($baseUrl . '/health'));
+
+            if ((string) $response->getBody() !== 'ok') {
+                return null;
+            }
+
+            return new self($projectPath, $baseUrl);
+        } catch (\Throwable) {
             return null;
         }
-
-        return new self($projectPath);
     }
 }

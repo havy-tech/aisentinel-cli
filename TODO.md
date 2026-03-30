@@ -1,25 +1,70 @@
 # TODO
 
-## Immediate: Raw Sentinel CLI Polish
+## Done (2026-03-29)
 
-Priority work before returning to the TUI. The raw `sentinel` command is the primary interface.
+- [x] Singleflight primitive (`$scope->singleflight($key, $task)`) in phalanx-core
+- [x] Pre-fetch changed file contents into review prompts
+- [x] Non-blocking DaemonAI bridge (ReactPHP Browser replaces blocking curl)
+- [x] `+>` prompt, token tracking, memory stats in status line
+- [x] Tempest syntax highlighting for code blocks (`tempest/highlight`)
+- [x] Step separator (thinking vs response)
+- [x] Feedback loop fix (no broadcast from humanMessage, externals logged only)
+- [x] Realpath fix for project root
+- [x] Meta-prompt: agents use tools proactively
 
-### Singleflight Primitive
-- `$scope->singleflight($key, $task)` — deduplicates concurrent tool calls across agents
-- When 4 agents all request `ReadFile("src/AgentLoop.php")`, only one execution happens
-- Vault docs: `20-knowledge/patterns/singleflight-multi-agent-tool-dedup.md`
-- Implementation in `phalanx-core` on `ExecutionScope`
+## Immediate: Smart Pipeline
 
-### Pre-fetch Changed File Contents
-- Include file contents directly in the review prompt instead of agents needing to call ReadFile
-- Reduces API round-trips and enables singleflight to work even better
-- Truncate large files, skip binaries
+The next major piece. Full ADR: `.aimind/decisions/adr-smart-pipeline-pattern.md`
 
-### Non-blocking DaemonAI SDK
-- Current `observe()` uses blocking `curl`/`file_get_contents`
-- Bridge already bypasses SDK for reads using ReactPHP `Browser` directly
-- Full async SDK: `Daemon::observeAsync(): PromiseInterface`
-- See "Async DaemonAI SDK" section below for details
+### Pipeline Primitive in phalanx-ai
+- `Pipeline` class: prepare → concurrent agents → converge
+- Emitter-based interface (yields `PipelineEvent` per stage)
+- Prepare and converge are `AgentDefinition` with `Retryable`
+- Fallback: exponential backoff → raw output if pipeline fails
+- Structured output from converge via `Turn::outputClass()`
+
+### Rewrite Coordinator as Pipeline Consumer
+- Coordinator creates `Pipeline`, submits input, renders result
+- Handles sentinel-specific concerns (DaemonAI broadcast, file watching) outside pipeline
+- Remove current prompt building, result collection, formatting logic
+
+### Bug Fixes
+- Fix DaemonAI session filter (own broadcasts read back as external)
+- Fix DaemonAiCoordinationTest (DaemonAI.php → Daemon.php rename)
+
+### Orchestration Pipeline: Prepare → Agents → Converge
+
+A fast model (Haiku) as an orchestration layer on both sides of domain agents:
+
+**Prepare stage** (before agents):
+- Receives raw input (human message or file changes) + agent roster with domain descriptions
+- Reads files once, decides what context each agent actually needs
+- Produces optimized per-agent prompt packages instead of giving everyone the same blob
+- Eliminates agents needing to call ReadFile for content the prepare stage already has
+
+**Converge stage** (after agents):
+- Receives: original input + all agent responses + rendering config
+- Deduplicates code blocks: renders shared code once as a numbered reference block
+- Rewrites agent commentary to use line references instead of re-quoting code
+- Strips preamble ("I'll review...", "Let me examine..."), keeps only findings
+- Omits agents that said "No issues" unless all did (then summarize as clean)
+- Preserves severity labels, applies severity-first ordering
+- Outputs terminal-ready text (with ```lang blocks for syntax highlighting)
+
+**Config (sentinel.yaml or SentinelConfig)**:
+- `pipeline.prepare: true|false` — toggle prepare stage
+- `pipeline.converge: true|false` — toggle converge stage
+- `pipeline.model: claude-haiku-4-5` — model for orchestration (fast + cheap)
+- `render.syntax_highlight: true|false` — toggle tempest highlighting
+- Running without pipeline = current behavior (raw agent output)
+
+**Implementation notes**:
+- Both stages use the same `AgentLoop` infrastructure, just different system prompts
+- Prepare and converge are `AgentDefinition` implementations with `provider()` returning Haiku
+- No tools needed for either stage — pure text in, text out
+- Coordinator becomes thinner: dispatches to pipeline stages, doesn't micromanage formatting
+- Cost: ~$0.002 per review round (two Haiku calls, ~500-1000 tokens each)
+- Latency: ~200-400ms per stage (Haiku is fast)
 
 ---
 

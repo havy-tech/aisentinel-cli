@@ -8,12 +8,14 @@ use Phalanx\Ai\AgentLoop;
 use Phalanx\Ai\AgentResult;
 use Phalanx\Ai\Event\AgentEvent;
 use Phalanx\Ai\Event\AgentEventKind;
+use Phalanx\Ai\Event\TokenUsage;
 use Phalanx\Ai\Message\Conversation;
 use Phalanx\Ai\Message\Message;
 use Phalanx\Ai\Turn;
 use Phalanx\ExecutionScope;
 use Phalanx\Sentinel\Agent\ReviewAgent;
 use Phalanx\Sentinel\Render\ReviewRenderer;
+use Phalanx\Sentinel\Watcher\ChangeKind;
 use Phalanx\Sentinel\Watcher\FileChange;
 use Phalanx\Task\Task;
 
@@ -26,6 +28,8 @@ final class Coordinator
 
     private bool $busy = false;
 
+    private readonly string $projectContext;
+
     /**
      * @param list<ReviewAgent> $agents
      */
@@ -34,7 +38,9 @@ final class Coordinator
         private readonly ReviewRenderer $renderer,
         private readonly string $projectRoot,
         private readonly ?DaemonAiBridge $bridge = null,
-    ) {}
+    ) {
+        $this->projectContext = self::buildProjectContext($projectRoot);
+    }
 
     /**
      * @param list<FileChange> $changes
@@ -46,39 +52,56 @@ final class Coordinator
 
     public function externalMessage(string $from, string $text, ExecutionScope $scope): void
     {
-        $this->renderer->info("External directive from {$from}");
-        $this->humanMessage("[EXTERNAL from {$from}]: {$text}", $scope);
+        $this->busy = true;
+        try {
+            $this->renderer->externalMessage($from, $text);
+
+            $tasks = $this->buildResponseTasks($prompt, maxSteps: 3);
+            $results = $scope->concurrent($tasks);
+
+            foreach ($results as $run) {
+                $feedback = trim($run->text);
+                if ($feedback !== '') {
+                    $this->renderer->agentFeedback($run->glyph, $run->color, $feedback);
+                }
+            }
+        } finally {
+            $this->busy = false;
+        }
     }
 
     public function reviewChanges(array $changes, ExecutionScope $scope): void
     {
         $this->busy = true;
+        $startTime = hrtime(true);
         try {
-        $this->reviewCount++;
-        $this->renderer->fileChanges($changes);
+            $this->reviewCount++;
+            $this->renderer->fileChanges($changes);
 
-        $changeSummary = self::formatChangeSummary($changes);
-        $tasks = $this->buildReviewTasks($changeSummary);
+            $changeSummary = self::formatChangeSummary($changes, $this->projectRoot);
+            $tasks = $this->buildReviewTasks($changeSummary);
 
-        /** @var array<string, AgentRunResult> $results */
-        $results = $scope->concurrent($tasks);
+            /** @var array<string, AgentRunResult> $results */
+            $results = $scope->concurrent($tasks);
 
-        $triggerSummary = count($changes) . ' file(s) changed';
+            $triggerSummary = count($changes) . ' file(s) changed';
+            $totalUsage = TokenUsage::zero();
 
-        foreach ($results as $agentName => $run) {
-            $text = trim($run->text);
+            foreach ($results as $agentName => $run) {
+                $text = trim($run->text);
+                $totalUsage = $totalUsage->add($run->usage);
 
-            if ($text === '') {
-                continue;
+                if ($text === '') {
+                    continue;
+                }
+
+                $this->renderer->agentFeedback($run->glyph, $run->color, $text);
+                $this->lastRoundFeedback[$agentName] = $text;
+                $this->bridge?->broadcast($agentName, $text, $triggerSummary);
             }
 
-            $this->renderer->agentFeedback($run->glyph, $run->color, $text);
-            $this->lastRoundFeedback[$agentName] = $text;
-            $this->saveConversation($agentName, $run);
-            $this->bridge?->broadcast($agentName, $text, $triggerSummary);
-        }
-
-        $this->renderer->reviewComplete($this->reviewCount);
+            $elapsed = (hrtime(true) - $startTime) / 1e9;
+            $this->renderer->reviewComplete($this->reviewCount, $elapsed, $totalUsage->total);
         } finally {
             $this->busy = false;
         }
@@ -87,24 +110,30 @@ final class Coordinator
     public function humanMessage(string $message, ExecutionScope $scope): void
     {
         $this->busy = true;
+        $startTime = hrtime(true);
         try {
             $this->renderer->humanMessage($message);
 
-            $prompt = $message;
-            $tasks = $this->buildResponseTasks($prompt, maxSteps: 3);
-
+            $enriched = $this->enrichWithFileContents($message);
+            $tasks = $this->buildResponseTasks($enriched);
             $results = $scope->concurrent($tasks);
 
-            foreach ($results as $agentName => $run) {
+            $this->reviewCount++;
+            $totalUsage = TokenUsage::zero();
+
+            foreach ($results as $run) {
                 $text = trim($run->text);
+                $totalUsage = $totalUsage->add($run->usage);
 
                 if ($text === '') {
                     continue;
                 }
 
                 $this->renderer->agentFeedback($run->glyph, $run->color, $text);
-                $this->bridge?->broadcast($agentName, $text, 'human: ' . $message);
             }
+
+            $elapsed = (hrtime(true) - $startTime) / 1e9;
+            $this->renderer->reviewComplete($this->reviewCount, $elapsed, $totalUsage->total);
         } finally {
             $this->busy = false;
         }
@@ -149,9 +178,10 @@ final class Coordinator
     /**
      * @return array<string, Task>
      */
-    private function buildResponseTasks(string $prompt, int $maxSteps = 3): array
+    private function buildResponseTasks(string $prompt, int $maxSteps = 5): array
     {
         $tasks = [];
+        $contextualPrompt = $this->projectContext . "\n\n" . $prompt;
 
         foreach ($this->agents as $agent) {
             $agentName = $agent->name();
@@ -161,7 +191,7 @@ final class Coordinator
 
             $turn = Turn::begin($agent)
                 ->conversation($conversation)
-                ->message(Message::user($prompt))
+                ->message(Message::user($contextualPrompt))
                 ->maxSteps($maxSteps);
 
             $projectRoot = $this->projectRoot;
@@ -187,6 +217,7 @@ final class Coordinator
         $events = AgentLoop::run($turn, $scope);
         $tokenBuffer = '';
         $conversation = null;
+        $usage = TokenUsage::zero();
 
         foreach ($events($scope) as $event) {
             if (!$event instanceof AgentEvent) {
@@ -195,14 +226,18 @@ final class Coordinator
 
             match ($event->kind) {
                 AgentEventKind::TokenDelta => $tokenBuffer .= $event->data->text,
-                AgentEventKind::AgentComplete => $conversation = $event->data instanceof AgentResult
-                    ? $event->data->conversation
-                    : null,
+                AgentEventKind::StepComplete => $tokenBuffer .= ($tokenBuffer !== '' ? "\n\n" : ''),
+                AgentEventKind::AgentComplete => (static function () use ($event, &$conversation, &$usage): void {
+                    if ($event->data instanceof AgentResult) {
+                        $conversation = $event->data->conversation;
+                    }
+                    $usage = $event->usageSoFar;
+                })(),
                 default => null,
             };
         }
 
-        return new AgentRunResult($agentName, $agentGlyph, $agentColor, $tokenBuffer, $conversation);
+        return new AgentRunResult($agentName, $agentGlyph, $agentColor, $tokenBuffer, $conversation, $usage);
     }
 
     private function conversationFor(ReviewAgent $agent): Conversation
@@ -213,7 +248,7 @@ final class Coordinator
     /**
      * @param list<FileChange> $changes
      */
-    private static function formatChangeSummary(array $changes): string
+    private static function formatChangeSummary(array $changes, string $projectRoot): string
     {
         $lines = ["File changes detected (" . count($changes) . " files):\n"];
 
@@ -231,6 +266,18 @@ final class Coordinator
                     $lines[] = "  {$dl}";
                 }
                 $lines[] = "  ```";
+            }
+
+            if ($change->kind !== ChangeKind::Deleted) {
+                $fullPath = rtrim($projectRoot, '/') . '/' . ltrim($change->path, '/');
+                if (is_readable($fullPath) && filesize($fullPath) <= 50_000) {
+                    $ext = pathinfo($change->path, PATHINFO_EXTENSION);
+                    $content = file_get_contents($fullPath);
+                    $lines[] = "  Full file contents:";
+                    $lines[] = "  ```{$ext}";
+                    $lines[] = $content;
+                    $lines[] = "  ```";
+                }
             }
         }
 
@@ -262,4 +309,69 @@ final class Coordinator
         return implode("\n\n", $parts);
     }
 
+    private function enrichWithFileContents(string $message): string
+    {
+        $patterns = [];
+
+        if (preg_match_all('/\b([\w\/.-]+\.(?:php|ts|tsx|js|json|yaml|yml|neon))\b/', $message, $matches)) {
+            $patterns = array_unique($matches[1]);
+        }
+
+        if ($patterns === []) {
+            return $message;
+        }
+
+        $found = [];
+        foreach ($patterns as $pattern) {
+            $filename = basename($pattern);
+            $results = [];
+            exec(
+                sprintf('find %s -name %s -not -path "*/vendor/*" -not -path "*/.git/*" 2>/dev/null',
+                    escapeshellarg($this->projectRoot),
+                    escapeshellarg($filename),
+                ),
+                $results,
+            );
+
+            foreach ($results as $fullPath) {
+                if (!is_readable($fullPath) || filesize($fullPath) > 50_000) {
+                    continue;
+                }
+
+                $relative = str_replace(rtrim($this->projectRoot, '/') . '/', '', $fullPath);
+                $ext = pathinfo($fullPath, PATHINFO_EXTENSION);
+                $content = file_get_contents($fullPath);
+                $found[$relative] = "File: {$relative}\n```{$ext}\n{$content}\n```";
+                break;
+            }
+        }
+
+        if ($found === []) {
+            return $message;
+        }
+
+        return $message . "\n\n--- Referenced files ---\n" . implode("\n\n", $found);
+    }
+
+    private static function buildProjectContext(string $projectRoot): string
+    {
+        $lines = ["Project: {$projectRoot}"];
+        $lines[] = "Source directories (use with read_file / list_directory):";
+
+        $srcDirs = glob($projectRoot . '/packages/*/src');
+        if ($srcDirs !== false && $srcDirs !== []) {
+            sort($srcDirs);
+            foreach ($srcDirs as $dir) {
+                $relative = str_replace(rtrim($projectRoot, '/') . '/', '', $dir);
+                $lines[] = "  {$relative}/";
+            }
+        }
+
+        $rootSrc = $projectRoot . '/src';
+        if (is_dir($rootSrc)) {
+            $lines[] = "  src/";
+        }
+
+        return implode("\n", $lines);
+    }
 }

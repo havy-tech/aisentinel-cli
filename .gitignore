@@ -1,6 +1,23 @@
-/vendor/
-.env
-.env.local
-composer.lock
+# Ignore everything by default
+*
 .*
+*.md
+
+# Include .gitignore itself
 !.gitignore
+
+# Include project files
+!README.md
+!TODO.md
+!composer.json
+!bin/
+!bin/**
+!src/
+!src/**
+!personas/
+!personas/**
+
+# Exclude TUI files (phalanx/terminal not published yet)
+src/Sentinel/SentinelTuiCommand.php
+src/Sentinel/Render/TuiRenderer.php
+bin/commands/sentinel-tui.php
