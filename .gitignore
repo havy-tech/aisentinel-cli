@@ -16,6 +16,8 @@
 !src/**
 !personas/
 !personas/**
+!docs/
+!docs/**
 
 # Exclude TUI files (phalanx/terminal not published yet)
 src/Sentinel/SentinelTuiCommand.php

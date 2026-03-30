@@ -1,0 +1,109 @@
+# Sentinel
+
+A multi-agent code review system that watches your project and sends every change through a team of AI specialists -- concurrently, in real time.
+
+![Sentinel multi-agent chat interface](docs/agent-intro.png)
+
+Point it at a directory. Save a file. Architecture, security, and performance agents review the change simultaneously, each through their own lens, and report back in seconds.
+
+## Quick Start
+
+```bash
+composer create-project phalanx/sentinel aisentinel-cli
+cd aisentinel-cli
+
+# Set your API key
+export ANTHROPIC_API_KEY=sk-...
+
+# Watch a project with the core preset (architecture + security + performance)
+php bin/sentinel.php sentinel /path/to/your/project --preset core
+```
+
+Type a message at the `+>` prompt to ask all agents a question. They answer concurrently and reference each other's findings to avoid duplication.
+
+## How It Works
+
+Sentinel runs three concurrent loops in a single PHP process -- no threads, no workers, no message queues:
+
+- **File watcher** detects changes, debounces, and emits batches
+- **Input reader** handles raw terminal input with readline-style editing
+- **DaemonAI poller** picks up cross-session observations (optional)
+
+When a change arrives, every active agent reviews it in parallel through Phalanx's fiber-based concurrency:
+
+```php
+<?php
+// Each agent runs in its own fiber -- no callbacks, no promises
+$scope->concurrent([
+    'Atlas'  => Task::of(static fn(ExecutionScope $s) => $atlas($s)),
+    'Aegis'  => Task::of(static fn(ExecutionScope $s) => $aegis($s)),
+    'Volt'   => Task::of(static fn(ExecutionScope $s) => $volt($s)),
+]);
+// All three complete → results rendered sequentially
+```
+
+File watching uses Phalanx's `Emitter`/`Channel` primitives -- the same pattern drives both the file watcher and the terminal input reader:
+
+```php
+<?php
+// Emitter produces events; consumer iterates with backpressure
+$fileChanges = ProjectWatcher::watch($projectRoot);
+
+foreach ($fileChanges($scope) as $batch) {
+    $coordinator->reviewChanges($batch, $scope);
+}
+```
+
+## Agents Are Markdown Files
+
+Each agent is a markdown file in `personas/`. The filename becomes the agent's lens; the `# heading` becomes its name; the `> blockquote` becomes its tagline.
+
+```markdown
+# Aegis
+
+> Injection, auth flaws, data exposure, cryptographic weakness
+
+You are a security-focused code reviewer. You think like an attacker.
+Every change is a potential attack surface expansion...
+```
+
+Add a file, get a new reviewer. No code changes required.
+
+### Presets
+
+| Preset | Agents |
+|--------|--------|
+| `core` | architecture, security, performance |
+| `php` | architecture, performance, security, phalanx |
+| `react-native` | architecture, state, performance, security |
+| `tv` | navigation, streaming, state, performance |
+| `full` | all personas |
+
+```bash
+php bin/sentinel.php sentinel /path/to/project --preset php
+```
+
+Or pick individual agents interactively when you omit `--preset`.
+
+## Built on Phalanx
+
+Sentinel is built on [Phalanx](https://github.com/havy-tech/phalanx), an async coordination framework for PHP 8.4+ that separates what you want from how it runs. Fibers, event loops, and concurrency primitives disappear behind a clean API:
+
+- `$scope->concurrent($tasks)` -- fan-out/fan-in with automatic fiber management
+- `Emitter::produce()` / `Channel` -- backpressure-aware streaming
+- `Task::of()` -- composable units of work with retry, timeout, and cancellation
+- Property hooks for declarative agent config (PHP 8.4)
+
+Phalanx is under active development. If async PHP without the ceremony interests you, take a look.
+
+## Status
+
+**Work in progress.** The raw CLI mode works. A terminal UI (split panels, real-time token streaming) is in development.
+
+We'd genuinely appreciate people trying Sentinel out and sharing feedback -- what works, what breaks, what's missing. Open an issue or start a discussion on the repo.
+
+## Requirements
+
+- PHP 8.4+
+- `fswatch` (`brew install fswatch` / `apt install fswatch`)
+- An Anthropic API key (OpenAI support exists but Anthropic is the primary target)
