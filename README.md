@@ -4,7 +4,7 @@ A multi-agent code review system that watches your project and sends every chang
 
 ![Sentinel multi-agent chat interface](docs/agent-intro.png)
 
-Point it at a directory. Save a file. Architecture, security, and performance agents review the change simultaneously, each through their own lens, and report back in seconds.
+Point it at a directory. Save a file. Your chosen agents review the change simultaneously -- each through their own lens -- and report back in seconds.
 
 ## Quick Start
 
@@ -34,12 +34,14 @@ When a change arrives, every active agent reviews it in parallel through Phalanx
 ```php
 <?php
 // Each agent runs in its own fiber -- no callbacks, no promises
-$scope->concurrent([
-    'Atlas'  => Task::of(static fn(ExecutionScope $s) => $atlas($s)),
-    'Aegis'  => Task::of(static fn(ExecutionScope $s) => $aegis($s)),
-    'Volt'   => Task::of(static fn(ExecutionScope $s) => $volt($s)),
-]);
-// All three complete → results rendered sequentially
+foreach ($agents as $name => $agent) {
+    $tasks[$name] = Task::of(
+        static fn(ExecutionScope $s) => self::executeAndCollect($turn, $s, $name)
+    );
+}
+
+$scope->concurrent($tasks);
+// All agents complete → results rendered sequentially
 ```
 
 File watching uses Phalanx's `Emitter`/`Channel` primitives -- the same pattern drives both the file watcher and the terminal input reader:
